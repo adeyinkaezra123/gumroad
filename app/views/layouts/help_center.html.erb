@@ -1,0 +1,34 @@
+<% content_for :meta do %>
+  <%= tag.link rel: "canonical", href: @canonical_url %>
+  <%= tag.meta name: "description", content: @description %>
+
+  <%= tag.meta property: "og:title", content: @title %>
+  <%= tag.meta property: "og:description", content: @description %>
+  <%= tag.meta property: "og:type", content: "website" %>
+  <%= tag.meta property: "og:url", content: @canonical_url %>
+
+  <%= tag.meta name: "twitter:card", content: "summary" %>
+  <%= tag.meta name: "twitter:title", content: @title %>
+  <%= tag.meta name: "twitter:description", content: @description %>
+<% end %>
+
+<% content_for :style do %>
+  <%= stylesheet_pack_tag :help_center %>
+<% end %>
+
+<%= render("shared/recaptcha_script") %>
+
+<% content_for :content do %>
+  <main>
+    <% unless @hide_support_header %>
+    <header>
+      <%= react_component "SupportHeader", props: { host: helper_widget_host, session: helper_session, new_ticket_url: support_index_path(new_ticket: true), recaptcha_site_key: GlobalConfig.get("RECAPTCHA_SIGNUP_SITE_KEY") }, prerender: true %>
+    </header>
+    <% end %>
+    <section class="paragraphs">
+      <%= yield %>
+    </section>
+  </main>
+<% end %>
+
+<%= render template: "layouts/application" %>
