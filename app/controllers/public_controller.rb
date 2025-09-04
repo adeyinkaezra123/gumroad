@@ -3,11 +3,14 @@
 class PublicController < ApplicationController
   include ActionView::Helpers::NumberHelper
   include HelperWidget
+  include ValidateRecaptcha
 
   before_action { opt_out_of_header(:csp) } # for the use of external JS on public pages
 
   before_action :hide_layouts, only: [:thank_you]
   before_action :set_on_public_page
+  before_action :ensure_support_ticket_feature_enabled, only: [:new_ticket, :create_ticket, :ticket_confirmation, :customer_info]
+
 
   def home
     redirect_to user_signed_in? ? after_sign_in_path_for(logged_in_user) : login_path
@@ -26,6 +29,7 @@ class PublicController < ApplicationController
   def charge_data
     purchases = Purchase.successful_gift_or_nongift.where("email = ?", params[:email])
     purchases = purchases.where("card_visual like ?", "%#{params[:last_4]}%") if params[:last_4].present? && params[:last_4].length == 4
+
     if purchases.none?
       render json: { success: false }
     else
@@ -74,80 +78,20 @@ class PublicController < ApplicationController
     respond_to :xml
   end
 
-  # public support portal actions
   def new_ticket
+    return render status: :not_found unless Feature.active?(:public_support_tickets_enabled)
+
     @title = "Contact Support"
     @recaptcha_site_key = GlobalConfig.get("RECAPTCHA_SIGNUP_SITE_KEY")
   end
 
   def create_ticket
-    # Validate reCAPTCHA
-    site_key = GlobalConfig.get("RECAPTCHA_SIGNUP_SITE_KEY")
-    if !(Rails.env.development? && GOOGLE_CLOUD_PROJECT_ID.blank?) && !valid_recaptcha_response?(site_key: site_key)
-      return render json: {
-        success: false,
-        error_message: "Sorry, we could not verify the CAPTCHA. Please try again."
-      }
-    end
+    return render_recaptcha_error unless valid_recaptcha?
+    return render_validation_error unless valid_params? && valid_email_format?
+    return render_user_not_found_error unless existing_user?
 
-    # Validate required parameters
-    email = params[:email]&.strip
-    subject = params[:subject]&.strip
-    message = params[:message]&.strip
-
-    if email.blank? || subject.blank? || message.blank?
-      return render json: {
-        success: false,
-        error_message: "Please fill in all required fields."
-      }
-    end
-
-    # Validate email format
-    unless email.match?(/\A[\w+\-.]+@[a-z\d-]+(\.[a-z\d-]+)*\.[a-z]+\z/i)
-      return render json: {
-        success: false,
-        error_message: "Please enter a valid email address."
-      }
-    end
-
-    # Check if user exists - only allow existing Gumroad users to create tickets
-    user = User.find_by(email: email)
-    unless user
-      return render json: {
-        success: false,
-        error_message: "Please check your email address and try again."
-      }
-    end
-
-    begin
-   # Create Helper conversation using the service
-   result = PublicSupportTicketCreationService.new(
-       email: email,
-       subject: subject,
-       message: message
-     ).call
-
-   if result[:success]
-     Rails.logger.info("Public support ticket created: #{result[:ticket_id]} for #{email}")
-     render json: {
-       success: true,
-       ticket_id: result[:ticket_id],
-       redirect_url: support_ticket_confirmation_path(result[:ticket_id])
-     }
-   else
-     Rails.logger.error("Failed to create public support ticket: #{result[:error]}")
-     render json: {
-       success: false,
-       error_message: "Sorry, we couldn't create your support ticket. Please try again."
-     }
-   end
-rescue => e
-  Rails.logger.error("Error creating public support ticket: #{e.message}")
-  render json: {
-    success: false,
-    error_message: "Sorry, something went wrong. Please try again."
-  }
- end
+    result = create_support_ticket
+    render_ticket_response(result)
   end
 
   def ticket_confirmation
@@ -160,18 +104,48 @@ rescue => e
     render layout: "help_center"
   end
 
-  # API endpoint for Helper to fetch customer information for existing users
   def customer_info
-    email = params[:email]
-    if email.blank?
-      render json: { error: "Email parameter is required" }, status: :bad_request
-      return
+    return render json: { error: "Email parameter is required" }, status: :bad_request if params[:email].blank?
+
+    user = User.find_by(email: params[:email])
+    render json: user ? build_customer_info(user) : { name: nil, metadata: {} }
+  end
+
+  private
+    def set_on_public_page
+      @body_class = "public"
     end
 
-    # Only provide info for existing Gumroad users - return consistent response to prevent email enumeration
-    user = User.find_by(email: email)
-    if user
-      customer_info = {
+    def valid_recaptcha?
+      site_key = GlobalConfig.get("RECAPTCHA_SIGNUP_SITE_KEY")
+      Rails.env.development? && GOOGLE_CLOUD_PROJECT_ID.blank? || valid_recaptcha_response?(site_key: site_key)
+    end
+
+    def valid_params?
+      ticket_params.values.all?(&:present?)
+    end
+
+    def existing_user?
+      User.exists?(email: ticket_params[:email])
+    end
+
+    def ticket_params
+      @ticket_params ||= {
+        email: params[:email]&.strip,
+        subject: params[:subject]&.strip,
+        message: params[:message]&.strip
+      }
+    end
+
+    def create_support_ticket
+      PublicSupportTicketCreationService.new(**ticket_params).call
+    rescue => e
+      Rails.logger.error("Error creating public support ticket: #{e.message}")
+      { success: false, error: "Service unavailable" }
+    end
+
+    def build_customer_info(user)
+      {
         name: user.name.presence,
         metadata: {
           source: "existing_user_support_ticket",
@@ -180,15 +154,53 @@ rescue => e
           registered_at: user.created_at.iso8601
         }
       }
-      render json: customer_info
-    else
-      # Return empty customer info for non-existing users to prevent email enumeration
-      render json: { name: nil, metadata: {} }
     end
-  end
 
-  private
-    def set_on_public_page
-      @body_class = "public"
+    def render_recaptcha_error
+      render json: {
+        success: false,
+        error_message: "Sorry, we could not verify the CAPTCHA. Please try again."
+      }
+    end
+
+    def render_validation_error
+      render json: {
+        success: false,
+        error_message: valid_params? ? "Please enter a valid email address." : "Please fill in all required fields."
+      }
+    end
+
+    def render_user_not_found_error
+      render json: {
+        success: false,
+        error_message: "Please check your email address and try again."
+      }
+    end
+
+    def render_ticket_response(result)
+      if result[:success]
+        Rails.logger.info("Public support ticket created: #{result[:ticket_id]} for #{ticket_params[:email]}")
+        render json: {
+          success: true,
+          ticket_id: result[:ticket_id],
+          redirect_url: support_ticket_confirmation_path(result[:ticket_id])
+        }
+      else
+        Rails.logger.error("Failed to create public support ticket: #{result[:error]}")
+        render json: {
+          success: false,
+          error_message: "Sorry, we couldn't create your support ticket. Please try again."
+        }
+      end
+    end
+
+    def valid_email_format?
+      ticket_params[:email].match?(/\A[\w+\-.]+@[a-z\d-]+(\.[a-z\d-]+)*\.[a-z]+\z/i)
+    end
+
+    def ensure_support_ticket_feature_enabled
+      unless Feature.active?(:public_support_tickets_enabled)
+        render status: :not_found
+      end
     end
 end

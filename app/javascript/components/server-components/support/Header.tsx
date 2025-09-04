@@ -3,6 +3,7 @@ import React from "react";
 import { createCast } from "ts-safe-cast";
 
 import { register } from "$app/utils/serverComponentUtil";
+import { useFeatureFlags } from "$app/components/FeatureFlags";
 
 import { Button } from "$app/components/Button";
 import { UnreadTicketsBadge } from "$app/components/support/UnreadTicketsBadge";
@@ -23,6 +24,8 @@ export function SupportHeader({
   const { pathname } = new URL(useOriginalLocation());
   const isHelpArticle =
     pathname.startsWith(Routes.help_center_root_path()) && pathname !== Routes.help_center_root_path();
+  const featureFlags = useFeatureFlags();
+  const publicSupportEnabled = featureFlags.public_support_tickets_enabled;
 
   const [isNewTicketOpen, setIsNewTicketOpen] = React.useState(false);
 
@@ -43,11 +46,11 @@ export function SupportHeader({
           <Button color="accent" onClick={onOpenNewTicket}>
             New ticket
           </Button>
-        ) : (
+        ) : publicSupportEnabled ? (
           <Button color="accent" onClick={() => setIsNewTicketOpen(true)}>
             Contact Support
           </Button>
-        )}
+        ) : null}
       </div>
       {hasHelperSession ? (
         <div role="tablist" className="col-span-full">
@@ -71,16 +74,17 @@ export function SupportHeader({
         </div>
       ) : null}
 
-      <NewTicketModal
-        open={isNewTicketOpen}
-        onClose={() => setIsNewTicketOpen(false)}
-        onCreated={() => {
-          setIsNewTicketOpen(false);
-          // The modal will handle redirecting to confirmation page
-        }}
-        isUnauthenticated={!hasHelperSession}
-        recaptchaSiteKey={recaptchaSiteKey}
-      />
+      {publicSupportEnabled && (
+        <NewTicketModal
+          open={isNewTicketOpen}
+          onClose={() => setIsNewTicketOpen(false)}
+          onCreated={() => {
+            setIsNewTicketOpen(false);
+          }}
+          isUnauthenticated={!hasHelperSession}
+          recaptchaSiteKey={recaptchaSiteKey}
+        />
+      )}
     </>
   );
 }

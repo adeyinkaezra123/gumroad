@@ -9,16 +9,13 @@ import { Modal } from "$app/components/Modal";
 import { showAlert } from "$app/components/server-components/Alert";
 import { RecaptchaCancelledError, useRecaptcha } from "$app/components/useRecaptcha";
 
-// Conditional import to avoid SSR issues
 let useCreateConversation: any, useCreateMessage: any;
 if (typeof window !== "undefined") {
   try {
     const helperHooks = require("@helperai/react");
     useCreateConversation = helperHooks.useCreateConversation;
     useCreateMessage = helperHooks.useCreateMessage;
-  } catch {
-    // Helper hooks not available
-  }
+  } catch {}
 }
 
 export function NewTicketModal({
@@ -34,7 +31,6 @@ export function NewTicketModal({
   isUnauthenticated?: boolean;
   recaptchaSiteKey?: string | null;
 }) {
-  // Only use Helper hooks when available and not unauthenticated
   const createConversation = React.useMemo(() => {
     if (!useCreateConversation || isUnauthenticated) return null;
     try {
@@ -71,20 +67,17 @@ export function NewTicketModal({
   const formRef = React.useRef<HTMLFormElement | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
 
-  // Initialize reCAPTCHA for unauthenticated users
   const recaptcha = useRecaptcha({ siteKey: isUnauthenticated ? recaptchaSiteKey : null });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (isUnauthenticated) {
-      // Handle unauthenticated submission
       if (!email.trim() || !subject.trim() || !message.trim()) {
         showAlert("Please fill in all required fields.", "error");
         return;
       }
 
-      // Basic email validation
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailRegex.test(email.trim())) {
         showAlert("Please enter a valid email address.", "error");
@@ -99,7 +92,6 @@ export function NewTicketModal({
         formData.append("subject", subject.trim());
         formData.append("message", message.trim());
 
-        // Execute reCAPTCHA for unauthenticated users
         let recaptchaToken = null;
         if (recaptchaSiteKey) {
           try {
@@ -130,12 +122,10 @@ export function NewTicketModal({
 
         if (data.success) {
           onCreated(data.ticket_id);
-          // Reset form
           setEmail("");
           setSubject("");
           setMessage("");
           onClose();
-          // Redirect to confirmation page
           window.location.href = data.redirect_url;
         } else {
           showAlert(data.error_message || "Something went wrong. Please try again.", "error");
@@ -146,7 +136,6 @@ export function NewTicketModal({
         setIsSubmitting(false);
       }
     } else {
-      // Handle authenticated submission (existing Helper flow)
       if (!subject.trim() || !message.trim()) return;
 
       if (!createConversation || !createMessage) {
@@ -191,7 +180,7 @@ export function NewTicketModal({
         </>
       }
     >
-      <form ref={formRef} className="space-y-4 md:w-[700px]" onSubmit={handleSubmit}>
+      <form ref={formRef} className="overflow-hidden space-y-4 w-[700px]" onSubmit={handleSubmit}>
         {isUnauthenticated && (
           <>
             <label className="sr-only">Email</label>
@@ -259,7 +248,6 @@ export function NewTicketModal({
           <div className="text-gray-500 text-sm">We typically respond within 24 hours during business days.</div>
         )}
 
-        {/* reCAPTCHA container for unauthenticated users */}
         {isUnauthenticated && recaptcha.container}
       </form>
     </Modal>

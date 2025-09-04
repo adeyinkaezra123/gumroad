@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# frozen_string_literal: truennrequire 'jwt'
+require "jwt"
 
 ##
 # Collection of methods to use Helper API.

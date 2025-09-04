@@ -44,7 +44,6 @@ export function useRecaptcha({ siteKey }: { siteKey: string | null }) {
   React.useEffect(() => {
     if (!siteKey) return;
 
-    // Check if grecaptcha is available
     if (typeof window === "undefined" || !(window as any).grecaptcha) {
       return;
     }
@@ -67,8 +66,6 @@ export function useRecaptcha({ siteKey }: { siteKey: string | null }) {
     if (widgetId === null) return Promise.reject(new RecaptchaCancelledError());
     (window as any).grecaptcha.enterprise.reset(widgetId);
     void (window as any).grecaptcha.enterprise.execute(widgetId);
-    // This promise should always complete if recaptcha works correctly, but it's not guaranteed to (e.g.
-    // if recaptcha's DOM structure ever changes, or if there's an error during their processing).
     return new Promise<string>((resolve, reject) => {
       listenForRecaptchaCancel(widgetId, () => {
         reject(new RecaptchaCancelledError());
@@ -78,5 +75,8 @@ export function useRecaptcha({ siteKey }: { siteKey: string | null }) {
     });
   };
 
-  return { container: <div ref={containerRef} style={{ display: "contents" }} />, execute };
+  return {
+    container: <div ref={containerRef} style={{ display: "contents", overflow: "hidden", position: "relative" }} />,
+    execute,
+  };
 }

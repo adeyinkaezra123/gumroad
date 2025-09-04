@@ -16,6 +16,8 @@ else
 end
 
 Rails.application.routes.draw do
+  mount Flipper::UI.app(Flipper) => "/flipper" if Rails.env.development?
+
   get "/healthcheck" => "healthcheck#index"
   get "/healthcheck/sidekiq" => "healthcheck#sidekiq"
 
@@ -956,7 +958,6 @@ Rails.application.routes.draw do
     get "/paypal_charge_data", to: "public#paypal_charge_data", as: :paypal_charge_data
     get "/CHARGE" => redirect("/charge")
 
-    # public support portal
     get "/support/new-ticket", to: "public#new_ticket", as: "new_support_ticket"
     post "/support/tickets", to: "public#create_ticket", as: "create_support_ticket"
     get "/support/tickets/:id/confirmation", to: "public#ticket_confirmation", as: "support_ticket_confirmation"
