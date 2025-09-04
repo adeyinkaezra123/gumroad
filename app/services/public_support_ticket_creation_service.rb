@@ -30,7 +30,6 @@ class PublicSupportTicketCreationService
   end
 
   private
-
     attr_reader :email, :subject, :message
 
     def create_helper_conversation

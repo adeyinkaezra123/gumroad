@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 # frozen_string_literal: truennrequire 'jwt'
 
 ##
@@ -40,7 +42,7 @@ class Helper::Client
     response.success?
   end
 
-    def create_conversation_for_unauthenticated_user(email:, subject:, message:)
+  def create_conversation_for_unauthenticated_user(email:, subject:, message:)
     # Create anonymous widget session with consistent session ID
     anonymous_session_id = SecureRandom.uuid
     widget_session = create_anonymous_widget_session(email, anonymous_session_id, subject)
@@ -136,7 +138,7 @@ class Helper::Client
       }
     end
 
-        def create_helper_message(widget_session, conversation_slug, message, subject = nil)
+    def create_helper_message(widget_session, conversation_slug, message, subject = nil)
       headers = {
         "Content-Type" => "application/json",
         "Authorization" => "Bearer #{create_widget_jwt_token(widget_session)}"
