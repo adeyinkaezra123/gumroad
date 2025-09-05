@@ -91,8 +91,12 @@ jobs:
             # Check if the base image already exists in the registry to avoid rebuilding.
             if ! docker manifest inspect "${WEB_BASE_REPO}:${BASE_IMAGE_TAG}" > /dev/null 2>&1; then
               echo "Building base image: ${WEB_BASE_REPO}:${BASE_IMAGE_TAG}"
+              # Copy required files to docker/base directory (same as Makefile approach)
+              rm -f docker/base/Gemfile* docker/base/.ruby-version
+              cp Gemfile* .ruby-version docker/base/
+              # Build from docker/base directory with proper context
+              cd docker/base && \
               docker build -t "${WEB_BASE_REPO}:${BASE_IMAGE_TAG}" \
-                -f docker/base/Dockerfile \
                 --build-arg "WEB_BASE_DOCKERFILE_FROM=ruby:${RUBY_VERSION}-slim-bullseye" \
                 --build-arg "BUNDLE_GEMS__CONTRIBSYS__COM=${BUNDLE_GEMS__CONTRIBSYS__COM:-}" \
                 .
@@ -148,6 +152,7 @@ jobs:
             docker run --rm \
               --network="${COMPOSE_PROJECT_NAME}_default" \
               -e RAILS_MASTER_KEY -e CI=true \
+              -e CIRCLE_NODE_INDEX="${CIRCLE_NODE_INDEX}" \
               -v /tmp/test-results:/tmp/test-results \
               "${WEB_REPO}:test-${CIRCLE_SHA1}" \
               bash -c "
@@ -155,7 +160,7 @@ jobs:
                 bundle exec rspec \
                   --format progress \
                   --format RspecJunitFormatter \
-                  --out /tmp/test-results/rspec/results-fast-${CIRCLE_NODE_INDEX}.xml \
+                  --out /tmp/test-results/rspec/results-fast-\${CIRCLE_NODE_INDEX}.xml \
                   $TEST_FILES
               "
       - store_test_results:
@@ -203,6 +208,7 @@ jobs:
             docker run --rm \
               --network="${COMPOSE_PROJECT_NAME}_default" \
               -e RAILS_MASTER_KEY -e CI=true \
+              -e CIRCLE_NODE_INDEX="${CIRCLE_NODE_INDEX}" \
               -v /tmp/test-results:/tmp/test-results \
               "${WEB_REPO}:test-${CIRCLE_SHA1}" \
               bash -c "
@@ -210,7 +216,7 @@ jobs:
                 bundle exec rspec \
                   --format progress \
                   --format RspecJunitFormatter \
-                  --out /tmp/test-results/rspec/results-slow-${CIRCLE_NODE_INDEX}.xml \
+                  --out /tmp/test-results/rspec/results-slow-\${CIRCLE_NODE_INDEX}.xml \
                   $TEST_FILES
               "
       - store_test_results:
