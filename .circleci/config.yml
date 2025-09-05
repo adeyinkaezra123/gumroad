@@ -95,11 +95,19 @@ jobs:
               rm -f docker/base/Gemfile* docker/base/.ruby-version
               cp Gemfile* .ruby-version docker/base/
               # Build from docker/base directory with proper context
-              cd docker/base && \
-              docker build -t "${WEB_BASE_REPO}:${BASE_IMAGE_TAG}" \
-                --build-arg "WEB_BASE_DOCKERFILE_FROM=ruby:${RUBY_VERSION}-slim-bullseye" \
-                --build-arg "BUNDLE_GEMS__CONTRIBSYS__COM=${BUNDLE_GEMS__CONTRIBSYS__COM:-}" \
-                .
+              cd docker/base
+              # Build command with conditional sidekiq-pro credentials
+              if [ -n "${BUNDLE_GEMS__CONTRIBSYS__COM:-}" ]; then
+                docker build -t "${WEB_BASE_REPO}:${BASE_IMAGE_TAG}" \
+                  --build-arg "WEB_BASE_DOCKERFILE_FROM=ruby:${RUBY_VERSION}-slim-bullseye" \
+                  --build-arg "BUNDLE_GEMS__CONTRIBSYS__COM=${BUNDLE_GEMS__CONTRIBSYS__COM}" \
+                  .
+              else
+                echo "Building without Sidekiq Pro (BUNDLE_GEMS__CONTRIBSYS__COM not set)"
+                docker build -t "${WEB_BASE_REPO}:${BASE_IMAGE_TAG}" \
+                  --build-arg "WEB_BASE_DOCKERFILE_FROM=ruby:${RUBY_VERSION}-slim-bullseye" \
+                  .
+              fi
               docker push "${WEB_BASE_REPO}:${BASE_IMAGE_TAG}"
             else
               echo "Base image ${WEB_BASE_REPO}:${BASE_IMAGE_TAG} already exists. Skipping build."
