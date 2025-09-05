@@ -3,30 +3,6 @@
 ENV["RAILS_ENV"] = "test"
 BUILDING_ON_CI = !ENV["CI"].nil?
 
-# SimpleCov configuration for test coverage
-require "simplecov"
-require "simplecov-html"
-
-SimpleCov.start "rails" do
-  add_filter "/bin/"
-  add_filter "/db/"
-  add_filter "/spec/"
-  add_filter "/config/"
-  add_filter "/vendor/"
-  add_filter "/tmp/"
-  
-  # Create a custom reports directory
-  coverage_dir "reports/coverage"
-  
-  # Generate HTML report
-  formatter SimpleCov::Formatter::HTMLFormatter
-  
-  # Track coverage for the new public support feature
-  add_group "Public Support", "app/controllers/public_controller.rb"
-  add_group "Support Services", "app/services/public_support_ticket_creation_service.rb"
-  add_group "Support JavaScript", "app/javascript/components/support/"
-end
-
 require File.expand_path("../config/environment", __dir__)
 
 require "capybara/rails"
