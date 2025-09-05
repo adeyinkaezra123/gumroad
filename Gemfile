@@ -7,11 +7,7 @@ ruby file: ".ruby-version"
 gem "rails", "7.1.3.4"
 gem "rake", "13.2.1"
 
-install_if -> { ENV["BUNDLE_GEMS__CONTRIBSYS__COM"] } do
-  source "https://gems.contribsys.com/" do
-    gem "sidekiq-pro", "~> 7.2"
-  end
-end
+# Removed sidekiq-pro dependency - using regular sidekiq gem instead
 
 group :development, :test do
   gem "bundler"

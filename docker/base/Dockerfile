@@ -21,7 +21,7 @@ ARG DEBIAN_FRONTEND="noninteractive"
 ARG DUMB_INIT_VERSION=1.2.0
 ARG GOSU_VERSION=1.10
 ARG S6_OVERLAY_VERSION=v1.19.1.1
-ARG BUNDLE_GEMS__CONTRIBSYS__COM
+# Removed BUNDLE_GEMS__CONTRIBSYS__COM - no longer using sidekiq-pro
 
 # Workaround weird jdk bug
 # https://github.com/geerlingguy/ansible-role-java/issues/64
@@ -97,7 +97,7 @@ RUN cd /tmp \
   # install gems
   && cd $APP_DIR \
   && gem install bundler:$(awk '/BUNDLED\ WITH/{getline; print}' Gemfile.lock | tr -d " ") \
-  && BUNDLE_GEMS__CONTRIBSYS__COM=${BUNDLE_GEMS__CONTRIBSYS__COM} bundle install \
+  && bundle install \
   # cleanup
   && apt-get remove -y \
   build-essential \

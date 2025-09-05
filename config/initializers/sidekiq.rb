@@ -1,26 +1,13 @@
 # frozen_string_literal: true
 
-# `sidekiq-pro` is now only autoloaded in staging/production due to the Gemfile
-# group. This ensures `sidekiq-pro` is correctly loaded in all environments
-# when available.
-begin
-  require "sidekiq-pro"
-rescue LoadError
-  warn "sidekiq-pro is not installed"
-end
+# Using regular sidekiq gem - no pro features needed
 
 require Rails.root.join("lib", "extras", "sidekiq_makara_reset_context_middleware")
 
 Sidekiq.configure_server do |config|
   config.redis = { url: "redis://#{ENV["SIDEKIQ_REDIS_HOST"]}" }
 
-  if defined?(Sidekiq::Pro)
-    # https://github.com/mperham/sidekiq/wiki/Reliability#using-super_fetch
-    config.super_fetch!
-
-    # https://github.com/mperham/sidekiq/wiki/Reliability#scheduler
-    config.reliable_scheduler!
-  end
+  # Using regular sidekiq - pro features (super_fetch, reliable_scheduler) removed
 
   # Cleanup Dead Locks
   # https://github.com/mhenrixon/sidekiq-unique-jobs/tree/ec69ac93afccd56cd424e2a9738e5ed478d941b2#cleanup-dead-locks
@@ -55,8 +42,7 @@ SidekiqUniqueJobs.configure do |config|
   config.enabled = !Rails.env.test?
 end
 
-# https://github.com/mperham/sidekiq/wiki/Pro-Reliability-Client
-Sidekiq::Client.reliable_push! if defined?(Sidekiq::Pro) && !Rails.env.test?
+# Using regular sidekiq - reliable_push feature removed
 
 # Store exception backtrace
 # https://github.com/mperham/sidekiq/wiki/Error-Handling#backtrace-logging
