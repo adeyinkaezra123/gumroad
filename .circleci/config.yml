@@ -1,0 +1,218 @@
+# CircleCI Configuration: Build, Test, and Deploy a Rails Application
+version: 2.1
+
+# Orbs provide reusable packages of configuration.
+# Note: No external orbs needed - using built-in CircleCI features only
+
+# Executors define the environment for jobs. 'machine' provides a full VM with Docker.
+executors:
+  docker-vm:
+    machine:
+      image: ubuntu-2204:current # A modern, stable Linux VM image
+    resource_class: large # Provides more CPU/RAM for Docker-heavy jobs
+
+# Reusable commands to keep our configuration DRY (Don't Repeat Yourself).
+commands:
+  # Logs into the GitHub Container Registry.
+  login_to_ghcr:
+    steps:
+      - run:
+          name: Log in to GitHub Container Registry
+          # GHCR_TOKEN and GITHUB_USERNAME must be set as CircleCI Environment Variables.
+          command: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_USERNAME" --password-stdin
+
+  # Sets up the application environment for building or testing.
+  setup_application_environment:
+    steps:
+      - checkout
+      - login_to_ghcr
+      - run:
+          name: Recreate secret files from environment variables
+          # This securely writes secret files needed for the build and tests at runtime.
+          # The environment variables (e.g., RAILS_CREDENTIALS_CONTENT) must be set in the CircleCI UI.
+          command: |
+            echo "Recreating secret files..."
+            echo "$RAILS_CREDENTIALS_CONTENT" > config/credentials.yml.enc
+            mkdir -p config/certs
+            echo "$IOS_DEV_CERT_CONTENT" > config/certs/development_com.GRD.iOSCreator.pem
+            echo "$IOS_PROD_CERT_CONTENT" > config/certs/production_com.GRD.iOSCreator.pem
+      - restore_cache:
+          keys:
+            - v1-geoip-file-{{ checksum ".ruby-version" }}
+            - v1-geoip-file-
+      - run:
+          name: Download GeoIP database (if not cached)
+          command: |
+            if [ ! -f lib/GeoIP2-City.mmdb ]; then
+              echo "Cache miss, downloading GeoIP file from MaxMind..."
+              # Create lib directory if it doesn't exist
+              mkdir -p lib
+              # Download directly from MaxMind (same as Docker build process)
+              # Note: You may want to store your license key as a CircleCI environment variable
+              curl -J -L -o /tmp/GeoIP2-City.tar.gz "https://download.maxmind.com/app/geoip_download?edition_id=GeoIP2-City&license_key=${MAXMIND_LICENSE_KEY}&suffix=tar.gz"
+              cd /tmp
+              tar xzf GeoIP2-City.tar.gz
+              mv GeoIP2-City_*/GeoIP2-City.mmdb ${CIRCLE_WORKING_DIRECTORY}/lib/GeoIP2-City.mmdb
+              rm -rf /tmp/GeoIP2-City*
+              echo "GeoIP database downloaded successfully."
+
+            else
+              echo "GeoIP file found in cache."
+            fi
+      - save_cache:
+          key: v1-geoip-file-{{ checksum ".ruby-version" }}
+          paths:
+            - "lib/GeoIP2-City.mmdb"
+
+# Jobs are the individual stages of the pipeline.
+jobs:
+  build_images:
+    executor: docker-vm
+    environment:
+      # Dynamically construct the GHCR repository path from the project's Git URL.
+      IMAGE_NAMESPACE: << pipeline.project.git_url >>
+    steps:
+      - setup_application_environment
+      - run:
+          name: Build and Push Base and Test Docker Images
+          command: |
+            set -ex # Exit on error and print commands
+            # Extract the namespace from the git URL (e.g., "owner/repo" from "https://github.com/owner/repo.git")
+            NAMESPACE=$(echo "${IMAGE_NAMESPACE}" | sed 's|.*github.com/||' | sed 's|\.git$||')
+            WEB_BASE_REPO="ghcr.io/${NAMESPACE}/web_base"
+            WEB_REPO="ghcr.io/${NAMESPACE}/web"
+
+            # Generate a unique, deterministic tag for the base image based on its dependencies.
+            BASE_IMAGE_TAG=$(sha256sum docker/base/Dockerfile .ruby-version | cut -d' ' -f1)
+
+            # Check if the base image already exists in the registry to avoid rebuilding.
+            if ! docker manifest inspect $WEB_BASE_REPO:$BASE_IMAGE_TAG > /dev/null 2>&1; then
+              echo "Building base image: $WEB_BASE_REPO:$BASE_IMAGE_TAG"
+              docker build -t $WEB_BASE_REPO:$BASE_IMAGE_TAG -f docker/base/Dockerfile .
+              docker push $WEB_BASE_REPO:$BASE_IMAGE_TAG
+            else
+              echo "Base image $WEB_BASE_REPO:$BASE_IMAGE_TAG already exists. Skipping build."
+            fi
+
+            # Always build and push the final test image, tagged with the unique commit SHA.
+            echo "Building test image: $WEB_REPO:test-${CIRCLE_SHA1}"
+            docker build -t $WEB_REPO:test-${CIRCLE_SHA1} -f docker/web/Dockerfile.test --build-arg BASE_IMAGE_TAG=$BASE_IMAGE_TAG .
+            docker push $WEB_REPO:test-${CIRCLE_SHA1}
+
+  # This job runs the faster part of the test suite in high parallelization.
+  test_fast:
+    executor: docker-vm
+    parallelism: 15 # Run 15 instances of this job in parallel.
+    environment:
+      IMAGE_NAMESPACE: << pipeline.project.git_url >>
+      COMPOSE_PROJECT_NAME: web_<< pipeline.id >>_fast_${CIRCLE_NODE_INDEX}
+    steps:
+      - setup_application_environment
+      - run:
+          name: Start services
+          command: docker compose -f docker/docker-compose-test-and-ci.yml up -d
+      - run:
+          name: Wait for database connection
+          command: |
+            NAMESPACE=$(echo "${IMAGE_NAMESPACE}" | sed 's|.*github.com/||' | sed 's|\.git$||')
+            WEB_REPO="ghcr.io/${NAMESPACE}/web"
+            docker run --rm --network=${COMPOSE_PROJECT_NAME}_default $WEB_REPO:test-${CIRCLE_SHA1} docker/ci/wait_on_connection.sh db_test 3306
+      - run:
+          name: Setup test database
+          command: |
+            NAMESPACE=$(echo "${IMAGE_NAMESPACE}" | sed 's|.*github.com/||' | sed 's|\.git$||')
+            WEB_REPO="ghcr.io/${NAMESPACE}/web"
+            docker run --rm --network=${COMPOSE_PROJECT_NAME}_default -e RAILS_ENV=test -e RAILS_MASTER_KEY $WEB_REPO:test-${CIRCLE_SHA1} bundle exec rake db:setup
+      - run:
+          name: Run fast tests (using CircleCI native test splitting)
+          # This replaces Knapsack Pro. It finds all specs, excludes slow ones, and splits them by timing data.
+          command: |
+            NAMESPACE=$(echo "${IMAGE_NAMESPACE}" | sed 's|.*github.com/||' | sed 's|\.git$||')
+            WEB_REPO="ghcr.io/${NAMESPACE}/web"
+            TEST_FILES=$(circleci tests glob "spec/**/*_spec.rb" | grep -v "spec/requests/" | circleci tests split --split-by=timings)
+            echo "Running test files on this node: $TEST_FILES"
+            docker run --rm --network=${COMPOSE_PROJECT_NAME}_default -e RAILS_MASTER_KEY -e CI=true $WEB_REPO:test-${CIRCLE_SHA1} bundle exec rspec --format progress $TEST_FILES
+      - run:
+          name: Clean up services
+          command: docker compose -f docker/docker-compose-test-and-ci.yml down -v --remove-orphans
+          when: always
+
+  # This job runs the slower request specs with even higher parallelization.
+  test_slow:
+    executor: docker-vm
+    parallelism: 45
+    environment:
+      IMAGE_NAMESPACE: << pipeline.project.git_url >>
+      COMPOSE_PROJECT_NAME: web_<< pipeline.id >>_slow_${CIRCLE_NODE_INDEX}
+    steps:
+      - setup_application_environment
+      - run:
+          name: Start services
+          command: docker compose -f docker/docker-compose-test-and-ci.yml up -d
+      - run:
+          name: Wait for database connection
+          command: |
+            NAMESPACE=$(echo "${IMAGE_NAMESPACE}" | sed 's|.*github.com/||' | sed 's|\.git$||')
+            WEB_REPO="ghcr.io/${NAMESPACE}/web"
+            docker run --rm --network=${COMPOSE_PROJECT_NAME}_default $WEB_REPO:test-${CIRCLE_SHA1} docker/ci/wait_on_connection.sh db_test 3306
+      - run:
+          name: Setup test database
+          command: |
+            NAMESPACE=$(echo "${IMAGE_NAMESPACE}" | sed 's|.*github.com/||' | sed 's|\.git$||')
+            WEB_REPO="ghcr.io/${NAMESPACE}/web"
+            docker run --rm --network=${COMPOSE_PROJECT_NAME}_default -e RAILS_ENV=test -e RAILS_MASTER_KEY $WEB_REPO:test-${CIRCLE_SHA1} bundle exec rake db:setup
+      - run:
+          name: Run slow tests (using CircleCI native test splitting)
+          # This targets ONLY the request specs and splits them evenly across 45 nodes.
+          command: |
+            NAMESPACE=$(echo "${IMAGE_NAMESPACE}" | sed 's|.*github.com/||' | sed 's|\.git$||')
+            WEB_REPO="ghcr.io/${NAMESPACE}/web"
+            TEST_FILES=$(circleci tests glob "spec/requests/**/*_spec.rb" | circleci tests split --split-by=timings)
+            echo "Running test files on this node: $TEST_FILES"
+            docker run --rm --network=${COMPOSE_PROJECT_NAME}_default -e RAILS_MASTER_KEY -e CI=true $WEB_REPO:test-${CIRCLE_SHA1} bundle exec rspec --format progress $TEST_FILES
+      - run:
+          name: Clean up services
+          command: docker compose -f docker/docker-compose-test-and-ci.yml down -v --remove-orphans
+          when: always
+
+  # This job contains your production deployment logic.
+  deploy:
+    executor: docker-vm
+    steps:
+      - checkout
+      - run:
+          name: Deploy to Production
+          # This is a placeholder for your deployment script or commands.
+          # For production secrets, it's best to use CircleCI Contexts to restrict access.
+          command: |
+            echo "All tests passed on the main branch. Deploying commit ${CIRCLE_SHA1}..."
+            #
+            # === Add your deployment commands here. ===
+            # Example for a script-based deployment:
+            # ./scripts/deploy.sh production
+            #
+            # Example for a manual SSH-based deployment:
+            # ssh deploy-user@your-server.com "/opt/deploy.sh ${CIRCLE_SHA1}"
+            #
+            echo "Deployment successful!"
+
+# Workflows define the order and conditions for running jobs.
+workflows:
+  version: 2
+  build-test-deploy:
+    jobs:
+      - build_images
+      - test_fast:
+          requires:
+            - build_images
+      - test_slow:
+          requires:
+            - build_images
+      - deploy:
+          requires:
+            - test_fast
+            - test_slow
+          filters:
+            branches:
+              only:
+                - main # This job ONLY runs on pushes to the 'main' branch.
