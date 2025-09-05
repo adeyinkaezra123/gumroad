@@ -102,6 +102,8 @@ jobs:
                 --build-arg "WEB_BASE_DOCKERFILE_FROM=ruby:${RUBY_VERSION}-slim-bullseye" \
                 .
               docker push "${WEB_BASE_REPO}:${BASE_IMAGE_TAG}"
+              # Return to project root after base image build
+              cd ../..
             else
               echo "Base image ${WEB_BASE_REPO}:${BASE_IMAGE_TAG} already exists. Skipping build."
             fi

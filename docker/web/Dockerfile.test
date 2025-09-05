@@ -69,5 +69,4 @@ ENV DATABASE_HOST=db_test \
 
 WORKDIR $APP_DIR
 
-ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["/usr/local/bin/gosu app docker/web/server.sh"]
