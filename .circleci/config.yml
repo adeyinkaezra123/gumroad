@@ -85,15 +85,17 @@ jobs:
             # Create a combined hash of both files for a single deterministic tag
             BASE_IMAGE_TAG=$(cat docker/base/Dockerfile .ruby-version | sha256sum | cut -d' ' -f1)
 
-            # Debug: Print variables to verify they're set correctly
-            echo "DEBUG: WEB_BASE_REPO=${WEB_BASE_REPO}"
-            echo "DEBUG: BASE_IMAGE_TAG=${BASE_IMAGE_TAG}"
-            echo "DEBUG: NAMESPACE=${NAMESPACE}"
+            # Get Ruby version for base image
+            RUBY_VERSION=$(cat .ruby-version)
 
             # Check if the base image already exists in the registry to avoid rebuilding.
             if ! docker manifest inspect "${WEB_BASE_REPO}:${BASE_IMAGE_TAG}" > /dev/null 2>&1; then
               echo "Building base image: ${WEB_BASE_REPO}:${BASE_IMAGE_TAG}"
-              docker build -t "${WEB_BASE_REPO}:${BASE_IMAGE_TAG}" -f docker/base/Dockerfile .
+              docker build -t "${WEB_BASE_REPO}:${BASE_IMAGE_TAG}" \
+                -f docker/base/Dockerfile \
+                --build-arg "WEB_BASE_DOCKERFILE_FROM=ruby:${RUBY_VERSION}-slim-bullseye" \
+                --build-arg "BUNDLE_GEMS__CONTRIBSYS__COM=${BUNDLE_GEMS__CONTRIBSYS__COM:-}" \
+                .
               docker push "${WEB_BASE_REPO}:${BASE_IMAGE_TAG}"
             else
               echo "Base image ${WEB_BASE_REPO}:${BASE_IMAGE_TAG} already exists. Skipping build."
@@ -101,7 +103,11 @@ jobs:
 
             # Always build and push the final test image, tagged with the unique commit SHA.
             echo "Building test image: ${WEB_REPO}:test-${CIRCLE_SHA1}"
-            docker build -t "${WEB_REPO}:test-${CIRCLE_SHA1}" -f docker/web/Dockerfile.test --build-arg "BASE_IMAGE_TAG=${BASE_IMAGE_TAG}" .
+            docker build -t "${WEB_REPO}:test-${CIRCLE_SHA1}" \
+              -f docker/web/Dockerfile.test \
+              --build-arg "WEB_DOCKERFILE_FROM=${WEB_BASE_REPO}:${BASE_IMAGE_TAG}" \
+              --build-arg "WEB_BASE_TEST_DOCKERFILE_FROM=${WEB_BASE_REPO}:${BASE_IMAGE_TAG}" \
+              .
             docker push "${WEB_REPO}:test-${CIRCLE_SHA1}"
 
   # This job runs the faster part of the test suite in high parallelization.
@@ -136,7 +142,24 @@ jobs:
             WEB_REPO="ghcr.io/${NAMESPACE}/web"
             TEST_FILES=$(circleci tests glob "spec/**/*_spec.rb" | grep -v "spec/requests/" | circleci tests split --split-by=timings)
             echo "Running test files on this node: $TEST_FILES"
-            docker run --rm --network="${COMPOSE_PROJECT_NAME}_default" -e RAILS_MASTER_KEY -e CI=true "${WEB_REPO}:test-${CIRCLE_SHA1}" bundle exec rspec --format progress $TEST_FILES
+            # Create test results directory on host
+            mkdir -p /tmp/test-results/rspec
+            # Run tests with both progress and JUnit XML output for CircleCI test insights
+            docker run --rm \
+              --network="${COMPOSE_PROJECT_NAME}_default" \
+              -e RAILS_MASTER_KEY -e CI=true \
+              -v /tmp/test-results:/tmp/test-results \
+              "${WEB_REPO}:test-${CIRCLE_SHA1}" \
+              bash -c "
+                mkdir -p /tmp/test-results/rspec
+                bundle exec rspec \
+                  --format progress \
+                  --format RspecJunitFormatter \
+                  --out /tmp/test-results/rspec/results-fast-${CIRCLE_NODE_INDEX}.xml \
+                  $TEST_FILES
+              "
+      - store_test_results:
+          path: /tmp/test-results
       - run:
           name: Clean up services
           command: docker compose -f docker/docker-compose-test-and-ci.yml down -v --remove-orphans
@@ -174,7 +197,24 @@ jobs:
             WEB_REPO="ghcr.io/${NAMESPACE}/web"
             TEST_FILES=$(circleci tests glob "spec/requests/**/*_spec.rb" | circleci tests split --split-by=timings)
             echo "Running test files on this node: $TEST_FILES"
-            docker run --rm --network="${COMPOSE_PROJECT_NAME}_default" -e RAILS_MASTER_KEY -e CI=true "${WEB_REPO}:test-${CIRCLE_SHA1}" bundle exec rspec --format progress $TEST_FILES
+            # Create test results directory on host
+            mkdir -p /tmp/test-results/rspec
+            # Run tests with both progress and JUnit XML output for CircleCI test insights
+            docker run --rm \
+              --network="${COMPOSE_PROJECT_NAME}_default" \
+              -e RAILS_MASTER_KEY -e CI=true \
+              -v /tmp/test-results:/tmp/test-results \
+              "${WEB_REPO}:test-${CIRCLE_SHA1}" \
+              bash -c "
+                mkdir -p /tmp/test-results/rspec
+                bundle exec rspec \
+                  --format progress \
+                  --format RspecJunitFormatter \
+                  --out /tmp/test-results/rspec/results-slow-${CIRCLE_NODE_INDEX}.xml \
+                  $TEST_FILES
+              "
+      - store_test_results:
+          path: /tmp/test-results
       - run:
           name: Clean up services
           command: docker compose -f docker/docker-compose-test-and-ci.yml down -v --remove-orphans
