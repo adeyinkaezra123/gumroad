@@ -120,27 +120,29 @@ jobs:
   # This job runs the faster part of the test suite in high parallelization.
   test_fast:
     executor: docker-vm
-    parallelism: 15 # Run 15 instances of this job in parallel.
+    parallelism: 8 # Reduced from 15 to 8 for cost optimization (Phase 1)
     environment:
       IMAGE_NAMESPACE: << pipeline.project.git_url >>
-      COMPOSE_PROJECT_NAME: web_<< pipeline.id >>_fast_${CIRCLE_NODE_INDEX}
+      PIPELINE_ID: << pipeline.id >>
     steps:
       - setup_application_environment
       - run:
           name: Start services
-          command: docker compose -f docker/docker-compose-test-and-ci.yml up -d
+          command: |
+            export COMPOSE_PROJECT_NAME="web_${PIPELINE_ID}_fast_${CIRCLE_NODE_INDEX}"
+            docker compose -f docker/docker-compose-test-and-ci.yml up -d
       - run:
           name: Wait for database connection
           command: |
             NAMESPACE=$(echo "${IMAGE_NAMESPACE}" | sed 's|.*github.com/||' | sed 's|\.git$||')
             WEB_REPO="ghcr.io/${NAMESPACE}/web"
-            docker run --rm --network="${COMPOSE_PROJECT_NAME}_default" "${WEB_REPO}:test-${CIRCLE_SHA1}" docker/ci/wait_on_connection.sh db_test 3306
+            docker run --rm --network="web_${PIPELINE_ID}_fast_${CIRCLE_NODE_INDEX}_default" "${WEB_REPO}:test-${CIRCLE_SHA1}" docker/ci/wait_on_connection.sh db_test 3306
       - run:
           name: Setup test database
           command: |
             NAMESPACE=$(echo "${IMAGE_NAMESPACE}" | sed 's|.*github.com/||' | sed 's|\.git$||')
             WEB_REPO="ghcr.io/${NAMESPACE}/web"
-            docker run --rm --network="${COMPOSE_PROJECT_NAME}_default" -e RAILS_ENV=test -e RAILS_MASTER_KEY "${WEB_REPO}:test-${CIRCLE_SHA1}" bundle exec rake db:setup
+            docker run --rm --network="web_${PIPELINE_ID}_fast_${CIRCLE_NODE_INDEX}_default" -e RAILS_ENV=test -e RAILS_MASTER_KEY "${WEB_REPO}:test-${CIRCLE_SHA1}" bundle exec rake db:setup
       - run:
           name: Run fast tests (using CircleCI native test splitting)
           # This replaces Knapsack Pro. It finds all specs, excludes slow ones, and splits them by timing data.
@@ -153,7 +155,7 @@ jobs:
             mkdir -p /tmp/test-results/rspec
             # Run tests with both progress and JUnit XML output for CircleCI test insights
             docker run --rm \
-              --network="${COMPOSE_PROJECT_NAME}_default" \
+              --network="web_${PIPELINE_ID}_fast_${CIRCLE_NODE_INDEX}_default" \
               -e RAILS_MASTER_KEY -e CI=true \
               -e CIRCLE_NODE_INDEX="${CIRCLE_NODE_INDEX}" \
               -v /tmp/test-results:/tmp/test-results \
@@ -170,36 +172,40 @@ jobs:
           path: /tmp/test-results
       - run:
           name: Clean up services
-          command: docker compose -f docker/docker-compose-test-and-ci.yml down -v --remove-orphans
+          command: |
+            export COMPOSE_PROJECT_NAME="web_${PIPELINE_ID}_fast_${CIRCLE_NODE_INDEX}"
+            docker compose -f docker/docker-compose-test-and-ci.yml down -v --remove-orphans
           when: always
 
   # This job runs the slower request specs with even higher parallelization.
   test_slow:
     executor: docker-vm
-    parallelism: 45
+    parallelism: 20 # Reduced from 45 to 20 for cost optimization (Phase 1)
     environment:
       IMAGE_NAMESPACE: << pipeline.project.git_url >>
-      COMPOSE_PROJECT_NAME: web_<< pipeline.id >>_slow_${CIRCLE_NODE_INDEX}
+      PIPELINE_ID: << pipeline.id >>
     steps:
       - setup_application_environment
       - run:
           name: Start services
-          command: docker compose -f docker/docker-compose-test-and-ci.yml up -d
+          command: |
+            export COMPOSE_PROJECT_NAME="web_${PIPELINE_ID}_slow_${CIRCLE_NODE_INDEX}"
+            docker compose -f docker/docker-compose-test-and-ci.yml up -d
       - run:
           name: Wait for database connection
           command: |
             NAMESPACE=$(echo "${IMAGE_NAMESPACE}" | sed 's|.*github.com/||' | sed 's|\.git$||')
             WEB_REPO="ghcr.io/${NAMESPACE}/web"
-            docker run --rm --network="${COMPOSE_PROJECT_NAME}_default" "${WEB_REPO}:test-${CIRCLE_SHA1}" docker/ci/wait_on_connection.sh db_test 3306
+            docker run --rm --network="web_${PIPELINE_ID}_slow_${CIRCLE_NODE_INDEX}_default" "${WEB_REPO}:test-${CIRCLE_SHA1}" docker/ci/wait_on_connection.sh db_test 3306
       - run:
           name: Setup test database
           command: |
             NAMESPACE=$(echo "${IMAGE_NAMESPACE}" | sed 's|.*github.com/||' | sed 's|\.git$||')
             WEB_REPO="ghcr.io/${NAMESPACE}/web"
-            docker run --rm --network="${COMPOSE_PROJECT_NAME}_default" -e RAILS_ENV=test -e RAILS_MASTER_KEY "${WEB_REPO}:test-${CIRCLE_SHA1}" bundle exec rake db:setup
+            docker run --rm --network="web_${PIPELINE_ID}_slow_${CIRCLE_NODE_INDEX}_default" -e RAILS_ENV=test -e RAILS_MASTER_KEY "${WEB_REPO}:test-${CIRCLE_SHA1}" bundle exec rake db:setup
       - run:
           name: Run slow tests (using CircleCI native test splitting)
-          # This targets ONLY the request specs and splits them evenly across 45 nodes.
+          # This targets ONLY the request specs and splits them evenly across nodes.
           command: |
             NAMESPACE=$(echo "${IMAGE_NAMESPACE}" | sed 's|.*github.com/||' | sed 's|\.git$||')
             WEB_REPO="ghcr.io/${NAMESPACE}/web"
@@ -209,7 +215,7 @@ jobs:
             mkdir -p /tmp/test-results/rspec
             # Run tests with both progress and JUnit XML output for CircleCI test insights
             docker run --rm \
-              --network="${COMPOSE_PROJECT_NAME}_default" \
+              --network="web_${PIPELINE_ID}_slow_${CIRCLE_NODE_INDEX}_default" \
               -e RAILS_MASTER_KEY -e CI=true \
               -e CIRCLE_NODE_INDEX="${CIRCLE_NODE_INDEX}" \
               -v /tmp/test-results:/tmp/test-results \
@@ -226,7 +232,9 @@ jobs:
           path: /tmp/test-results
       - run:
           name: Clean up services
-          command: docker compose -f docker/docker-compose-test-and-ci.yml down -v --remove-orphans
+          command: |
+            export COMPOSE_PROJECT_NAME="web_${PIPELINE_ID}_slow_${CIRCLE_NODE_INDEX}"
+            docker compose -f docker/docker-compose-test-and-ci.yml down -v --remove-orphans
           when: always
 
   # This job contains your production deployment logic.
