@@ -5,10 +5,15 @@ AWS_ACCESS_KEY = GlobalConfig.get("AWS_ACCESS_KEY_ID")
 AWS_SECRET_KEY = GlobalConfig.get("AWS_SECRET_ACCESS_KEY")
 AWS_DEFAULT_REGION = GlobalConfig.get("AWS_DEFAULT_REGION", "us-east-1")
 
-Aws.config.update(
-  region: AWS_DEFAULT_REGION,
-  credentials: Aws::Credentials.new(AWS_ACCESS_KEY, AWS_SECRET_KEY)
-)
+# Only configure AWS if credentials are present (allows testing without real AWS)
+if AWS_ACCESS_KEY.present? && AWS_SECRET_KEY.present?
+  Aws.config.update(
+    region: AWS_DEFAULT_REGION,
+    credentials: Aws::Credentials.new(AWS_ACCESS_KEY, AWS_SECRET_KEY)
+  )
+else
+  Rails.logger.warn "AWS credentials not found - AWS services will not be available"
+end
 
 INVOICES_S3_BUCKET = GlobalConfig.get("INVOICES_S3_BUCKET", "gumroad-invoices")
 S3_CREDENTIALS = { access_key_id: AWS_ACCESS_KEY, secret_access_key: AWS_SECRET_KEY, s3_region: AWS_DEFAULT_REGION }.freeze
