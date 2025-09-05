@@ -33,9 +33,8 @@ commands:
           command: |
             echo "Recreating secret files..."
             echo "$RAILS_CREDENTIALS_CONTENT" > config/credentials.yml.enc
-            mkdir -p config/certs
-            echo "$IOS_DEV_CERT_CONTENT" > config/certs/development_com.GRD.iOSCreator.pem
-            echo "$IOS_PROD_CERT_CONTENT" > config/certs/production_com.GRD.iOSCreator.pem
+            # Note: iOS certificates removed - not required for Rails testing
+            # Add them back if specific iOS-related tests start failing
       - restore_cache:
           keys:
             - v1-geoip-file-{{ checksum ".ruby-version" }}
@@ -83,21 +82,27 @@ jobs:
             WEB_REPO="ghcr.io/${NAMESPACE}/web"
 
             # Generate a unique, deterministic tag for the base image based on its dependencies.
-            BASE_IMAGE_TAG=$(sha256sum docker/base/Dockerfile .ruby-version | cut -d' ' -f1)
+            # Create a combined hash of both files for a single deterministic tag
+            BASE_IMAGE_TAG=$(cat docker/base/Dockerfile .ruby-version | sha256sum | cut -d' ' -f1)
+
+            # Debug: Print variables to verify they're set correctly
+            echo "DEBUG: WEB_BASE_REPO=${WEB_BASE_REPO}"
+            echo "DEBUG: BASE_IMAGE_TAG=${BASE_IMAGE_TAG}"
+            echo "DEBUG: NAMESPACE=${NAMESPACE}"
 
             # Check if the base image already exists in the registry to avoid rebuilding.
-            if ! docker manifest inspect $WEB_BASE_REPO:$BASE_IMAGE_TAG > /dev/null 2>&1; then
-              echo "Building base image: $WEB_BASE_REPO:$BASE_IMAGE_TAG"
-              docker build -t $WEB_BASE_REPO:$BASE_IMAGE_TAG -f docker/base/Dockerfile .
-              docker push $WEB_BASE_REPO:$BASE_IMAGE_TAG
+            if ! docker manifest inspect "${WEB_BASE_REPO}:${BASE_IMAGE_TAG}" > /dev/null 2>&1; then
+              echo "Building base image: ${WEB_BASE_REPO}:${BASE_IMAGE_TAG}"
+              docker build -t "${WEB_BASE_REPO}:${BASE_IMAGE_TAG}" -f docker/base/Dockerfile .
+              docker push "${WEB_BASE_REPO}:${BASE_IMAGE_TAG}"
             else
-              echo "Base image $WEB_BASE_REPO:$BASE_IMAGE_TAG already exists. Skipping build."
+              echo "Base image ${WEB_BASE_REPO}:${BASE_IMAGE_TAG} already exists. Skipping build."
             fi
 
             # Always build and push the final test image, tagged with the unique commit SHA.
-            echo "Building test image: $WEB_REPO:test-${CIRCLE_SHA1}"
-            docker build -t $WEB_REPO:test-${CIRCLE_SHA1} -f docker/web/Dockerfile.test --build-arg BASE_IMAGE_TAG=$BASE_IMAGE_TAG .
-            docker push $WEB_REPO:test-${CIRCLE_SHA1}
+            echo "Building test image: ${WEB_REPO}:test-${CIRCLE_SHA1}"
+            docker build -t "${WEB_REPO}:test-${CIRCLE_SHA1}" -f docker/web/Dockerfile.test --build-arg "BASE_IMAGE_TAG=${BASE_IMAGE_TAG}" .
+            docker push "${WEB_REPO}:test-${CIRCLE_SHA1}"
 
   # This job runs the faster part of the test suite in high parallelization.
   test_fast:
@@ -116,13 +121,13 @@ jobs:
           command: |
             NAMESPACE=$(echo "${IMAGE_NAMESPACE}" | sed 's|.*github.com/||' | sed 's|\.git$||')
             WEB_REPO="ghcr.io/${NAMESPACE}/web"
-            docker run --rm --network=${COMPOSE_PROJECT_NAME}_default $WEB_REPO:test-${CIRCLE_SHA1} docker/ci/wait_on_connection.sh db_test 3306
+            docker run --rm --network="${COMPOSE_PROJECT_NAME}_default" "${WEB_REPO}:test-${CIRCLE_SHA1}" docker/ci/wait_on_connection.sh db_test 3306
       - run:
           name: Setup test database
           command: |
             NAMESPACE=$(echo "${IMAGE_NAMESPACE}" | sed 's|.*github.com/||' | sed 's|\.git$||')
             WEB_REPO="ghcr.io/${NAMESPACE}/web"
-            docker run --rm --network=${COMPOSE_PROJECT_NAME}_default -e RAILS_ENV=test -e RAILS_MASTER_KEY $WEB_REPO:test-${CIRCLE_SHA1} bundle exec rake db:setup
+            docker run --rm --network="${COMPOSE_PROJECT_NAME}_default" -e RAILS_ENV=test -e RAILS_MASTER_KEY "${WEB_REPO}:test-${CIRCLE_SHA1}" bundle exec rake db:setup
       - run:
           name: Run fast tests (using CircleCI native test splitting)
           # This replaces Knapsack Pro. It finds all specs, excludes slow ones, and splits them by timing data.
@@ -131,7 +136,7 @@ jobs:
             WEB_REPO="ghcr.io/${NAMESPACE}/web"
             TEST_FILES=$(circleci tests glob "spec/**/*_spec.rb" | grep -v "spec/requests/" | circleci tests split --split-by=timings)
             echo "Running test files on this node: $TEST_FILES"
-            docker run --rm --network=${COMPOSE_PROJECT_NAME}_default -e RAILS_MASTER_KEY -e CI=true $WEB_REPO:test-${CIRCLE_SHA1} bundle exec rspec --format progress $TEST_FILES
+            docker run --rm --network="${COMPOSE_PROJECT_NAME}_default" -e RAILS_MASTER_KEY -e CI=true "${WEB_REPO}:test-${CIRCLE_SHA1}" bundle exec rspec --format progress $TEST_FILES
       - run:
           name: Clean up services
           command: docker compose -f docker/docker-compose-test-and-ci.yml down -v --remove-orphans
@@ -154,13 +159,13 @@ jobs:
           command: |
             NAMESPACE=$(echo "${IMAGE_NAMESPACE}" | sed 's|.*github.com/||' | sed 's|\.git$||')
             WEB_REPO="ghcr.io/${NAMESPACE}/web"
-            docker run --rm --network=${COMPOSE_PROJECT_NAME}_default $WEB_REPO:test-${CIRCLE_SHA1} docker/ci/wait_on_connection.sh db_test 3306
+            docker run --rm --network="${COMPOSE_PROJECT_NAME}_default" "${WEB_REPO}:test-${CIRCLE_SHA1}" docker/ci/wait_on_connection.sh db_test 3306
       - run:
           name: Setup test database
           command: |
             NAMESPACE=$(echo "${IMAGE_NAMESPACE}" | sed 's|.*github.com/||' | sed 's|\.git$||')
             WEB_REPO="ghcr.io/${NAMESPACE}/web"
-            docker run --rm --network=${COMPOSE_PROJECT_NAME}_default -e RAILS_ENV=test -e RAILS_MASTER_KEY $WEB_REPO:test-${CIRCLE_SHA1} bundle exec rake db:setup
+            docker run --rm --network="${COMPOSE_PROJECT_NAME}_default" -e RAILS_ENV=test -e RAILS_MASTER_KEY "${WEB_REPO}:test-${CIRCLE_SHA1}" bundle exec rake db:setup
       - run:
           name: Run slow tests (using CircleCI native test splitting)
           # This targets ONLY the request specs and splits them evenly across 45 nodes.
@@ -169,7 +174,7 @@ jobs:
             WEB_REPO="ghcr.io/${NAMESPACE}/web"
             TEST_FILES=$(circleci tests glob "spec/requests/**/*_spec.rb" | circleci tests split --split-by=timings)
             echo "Running test files on this node: $TEST_FILES"
-            docker run --rm --network=${COMPOSE_PROJECT_NAME}_default -e RAILS_MASTER_KEY -e CI=true $WEB_REPO:test-${CIRCLE_SHA1} bundle exec rspec --format progress $TEST_FILES
+            docker run --rm --network="${COMPOSE_PROJECT_NAME}_default" -e RAILS_MASTER_KEY -e CI=true "${WEB_REPO}:test-${CIRCLE_SHA1}" bundle exec rspec --format progress $TEST_FILES
       - run:
           name: Clean up services
           command: docker compose -f docker/docker-compose-test-and-ci.yml down -v --remove-orphans
